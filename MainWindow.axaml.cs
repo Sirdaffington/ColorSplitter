@@ -260,10 +260,10 @@ public partial class MainWindow : Window
                 break;
         }
         
-        // Store new variable for quantized image, also stops GarbageCollection.
-        _editedBitmap = bmp;
+        // Get the processed image with optional stray pixel removal
+        _editedBitmap = ImageSplitting.getProcessedImage();
         
-        // Convert the Quantized Image to Avalonia Bitmap
+        // Convert the Processed Image to Avalonia Bitmap
         _previewBitmap = _editedBitmap.ConvertToAvaloniaBitmap();
         
         // Apply Avalonia Bitmap to ImagePreview UI Element
@@ -374,13 +374,27 @@ public partial class MainWindow : Window
     private void RemoveStrayPixelsCheckBox_OnChecked(object? sender, RoutedEventArgs e)
     {
         ImageSplitting.RemoveStrayPixels = true;
-        updateQuantize();
+        updateProcessedImageOnly();
     }
 
     // Event handler for the RemoveStrayPixelsCheckBox Unchecked event
     private void RemoveStrayPixelsCheckBox_OnUnchecked(object? sender, RoutedEventArgs e)
     {
         ImageSplitting.RemoveStrayPixels = false;
-        updateQuantize();
+        updateProcessedImageOnly();
+    }
+    
+    // Updates only the processed image without re-running quantization
+    private void updateProcessedImageOnly()
+    {
+        // Only update if we have a quantized bitmap
+        if (_rawBitmap is null) return;
+        
+        // Get the processed image with optional stray pixel removal
+        _editedBitmap = ImageSplitting.getProcessedImage();
+        
+        // Convert to Avalonia Bitmap and update UI
+        _previewBitmap = _editedBitmap.ConvertToAvaloniaBitmap();
+        ImagePreview.Image = _previewBitmap;
     }
 }

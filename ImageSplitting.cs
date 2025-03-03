@@ -30,19 +30,24 @@ public class ImageSplitting
             case Algorithm.KMeans:
                 int Iterations = argument == null ? 4 : (int)argument;
                 var kMeans = new KMeans(Colors, Iterations);
-                kMeans.initializationAlgorithm = (KMeans.clusterAlgorithm)argument2;
                 (quantizedBitmap, colorDictionary) = kMeans.applyKMeans(accessedBitmap, lab);
                 break;
         }
         
-        // Apply stray pixel removal if enabled
-        if (RemoveStrayPixels)
-        {
-            quantizedBitmap = removeStrayPixels(quantizedBitmap);
-        }
-        
         // Don't even bother asking what int in colorDictionary was used for before, my guess is it was the total amount of that color?? :shrug:
         return (quantizedBitmap, colorDictionary);
+    }
+
+    // Gets the post-processed image with optional stray pixel removal applied
+    public static SKBitmap getProcessedImage()
+    {
+        // Apply stray pixel removal if enabled, otherwise just return the quantized bitmap
+        if (RemoveStrayPixels)
+        {
+            return removeStrayPixels(quantizedBitmap);
+        }
+        
+        return quantizedBitmap;
     }
 
     // Removes stray pixels by replacing them with the most common neighboring color
@@ -51,39 +56,47 @@ public class ImageSplitting
         // Create a copy of the bitmap to work with
         SKBitmap outputBitmap = bitmap.Copy();
         
-        // Get dimensions
+        // Skip processing if the image is too small
         int width = bitmap.Width;
         int height = bitmap.Height;
-        
-        // Skip processing if the image is too small
         if (width <= 2 || height <= 2)
             return outputBitmap;
             
-        // Get pointers to pixel data
-        var srcPtr = (byte*)bitmap.GetPixels().ToPointer();
-        var dstPtr = (byte*)outputBitmap.GetPixels().ToPointer();
-        
-        // Create a temporary array to store the original image data
-        byte[] imageData = new byte[width * height * 4];
-        System.Runtime.InteropServices.Marshal.Copy(bitmap.GetPixels(), imageData, 0, imageData.Length);
+        // Get Memory Pointers for both Original and New Bitmaps
+        byte* srcPtr = (byte*)bitmap.GetPixels().ToPointer();
+        byte* dstPtr = (byte*)outputBitmap.GetPixels().ToPointer();
         
         // Define adjacent directions (up, right, down, left)
-        int[] dx = { 0, 1, 0, -1 };
-        int[] dy = { -1, 0, 1, 0 };
+        int[] offsets = new int[4];
+        offsets[0] = -width * 4;  // up
+        offsets[1] = 4;           // right
+        offsets[2] = width * 4;   // down
+        offsets[3] = -4;          // left
         
-        // Process each pixel (excluding the border pixels)
+        // Create a temporary buffer for a single scan line to avoid modifying pixels we're still checking
+        byte* tempRow = stackalloc byte[width * 4];
+        
+        // Process each row (excluding the border rows)
         for (int y = 1; y < height - 1; y++)
         {
+            // Calculate the start of the current row
+            byte* rowStart = srcPtr + (y * width * 4);
+            byte* outputRowStart = dstPtr + (y * width * 4);
+            
+            // Copy the current row to our temp buffer
+            Buffer.MemoryCopy(outputRowStart, tempRow, width * 4, width * 4);
+            
+            // Process each pixel in the row (excluding the border pixels)
             for (int x = 1; x < width - 1; x++)
             {
-                // Calculate pixel index
-                int pixelIndex = (y * width + x) * 4;
+                // Calculate the current pixel position
+                byte* pixelPtr = rowStart + (x * 4);
                 
                 // Get current pixel color
-                byte b = imageData[pixelIndex];
-                byte g = imageData[pixelIndex + 1];
-                byte r = imageData[pixelIndex + 2];
-                byte a = imageData[pixelIndex + 3];
+                byte b = pixelPtr[0];
+                byte g = pixelPtr[1];
+                byte r = pixelPtr[2];
+                byte a = pixelPtr[3];
                 
                 // Skip transparent pixels
                 if (a == 0)
@@ -95,17 +108,13 @@ public class ImageSplitting
                 // Check the 4 adjacent neighbors
                 for (int i = 0; i < 4 && isStrayPixel; i++)
                 {
-                    // Calculate neighbor position
-                    int nx = x + dx[i];
-                    int ny = y + dy[i];
-                    
-                    // Calculate neighbor index
-                    int neighborIndex = (ny * width + nx) * 4;
+                    // Get neighbor pixel
+                    byte* neighborPtr = pixelPtr + offsets[i];
                     
                     // If any adjacent neighbor has the same color, it's not isolated
-                    if (imageData[neighborIndex] == b && 
-                        imageData[neighborIndex + 1] == g && 
-                        imageData[neighborIndex + 2] == r)
+                    if (neighborPtr[0] == b && 
+                        neighborPtr[1] == g && 
+                        neighborPtr[2] == r)
                     {
                         isStrayPixel = false;
                     }
@@ -114,58 +123,75 @@ public class ImageSplitting
                 // Replace isolated pixels with most common adjacent color
                 if (isStrayPixel)
                 {
-                    // Count occurrences of each adjacent color
-                    Dictionary<(byte, byte, byte), int> colorCount = new Dictionary<(byte, byte, byte), int>();
+                    // We only have 4 neighbors, so we can use a simple array instead of a dictionary
+                    // Each entry is a color and its count: (r, g, b, count)
+                    byte[,] colorCounts = new byte[4, 4]; // Max 4 different colors (one from each direction)
+                    int colorCount = 0;
                     
                     // Loop through the 4 adjacent neighbors
                     for (int i = 0; i < 4; i++)
                     {
-                        // Calculate neighbor position
-                        int nx = x + dx[i];
-                        int ny = y + dy[i];
-                        
-                        // Calculate neighbor index
-                        int neighborIndex = (ny * width + nx) * 4;
+                        // Get neighbor pixel
+                        byte* neighborPtr = pixelPtr + offsets[i];
                         
                         // Skip transparent neighbors
-                        if (imageData[neighborIndex + 3] == 0)
+                        if (neighborPtr[3] == 0)
                             continue;
                             
-                        // Fetch neighbor color
-                        byte nb = imageData[neighborIndex];
-                        byte ng = imageData[neighborIndex + 1];
-                        byte nr = imageData[neighborIndex + 2];
+                        // Get neighbor color
+                        byte nb = neighborPtr[0];
+                        byte ng = neighborPtr[1];
+                        byte nr = neighborPtr[2];
                         
-                        // Add to color count
-                        var colorKey = (nr, ng, nb);
-                        if (colorCount.ContainsKey(colorKey))
-                            colorCount[colorKey]++;
-                        else
-                            colorCount[colorKey] = 1;
-                    }
-                    
-                    // Find the most common color
-                    (byte, byte, byte) mostCommonColor = (0, 0, 0);
-                    int maxCount = 0;
-                    
-                    foreach (var colorEntry in colorCount)
-                    {
-                        if (colorEntry.Value > maxCount)
+                        // Check if we already have this color
+                        bool foundColor = false;
+                        for (int j = 0; j < colorCount; j++)
                         {
-                            maxCount = colorEntry.Value;
-                            mostCommonColor = colorEntry.Key;
+                            if (colorCounts[j, 0] == nr && 
+                                colorCounts[j, 1] == ng && 
+                                colorCounts[j, 2] == nb)
+                            {
+                                colorCounts[j, 3]++;
+                                foundColor = true;
+                                break;
+                            }
+                        }
+                        
+                        // If not found, add it
+                        if (!foundColor && colorCount < 4)
+                        {
+                            colorCounts[colorCount, 0] = nr;
+                            colorCounts[colorCount, 1] = ng;
+                            colorCounts[colorCount, 2] = nb;
+                            colorCounts[colorCount, 3] = 1;
+                            colorCount++;
                         }
                     }
                     
-                    // Replace the stray pixel with the most common neighboring color
-                    int currentDstIndex = (y * width + x) * 4;
-                    dstPtr[currentDstIndex] = mostCommonColor.Item3;     // B
-                    dstPtr[currentDstIndex + 1] = mostCommonColor.Item2; // G
-                    dstPtr[currentDstIndex + 2] = mostCommonColor.Item1; // R
-                    // Keep the original alpha value
-                    dstPtr[currentDstIndex + 3] = a;
+                    // Find the most common color
+                    byte maxCount = 0;
+                    int maxIndex = 0;
+                    
+                    for (int j = 0; j < colorCount; j++)
+                    {
+                        if (colorCounts[j, 3] > maxCount)
+                        {
+                            maxCount = colorCounts[j, 3];
+                            maxIndex = j;
+                        }
+                    }
+                    
+                    // Write the most common color to our temp buffer
+                    byte* outputPixel = tempRow + (x * 4);
+                    outputPixel[0] = colorCounts[maxIndex, 2]; // B
+                    outputPixel[1] = colorCounts[maxIndex, 1]; // G
+                    outputPixel[2] = colorCounts[maxIndex, 0]; // R
+                    outputPixel[3] = a;                        // Keep original alpha
                 }
             }
+            
+            // Copy the modified row back to the output bitmap
+            Buffer.MemoryCopy(tempRow, outputRowStart, width * 4, width * 4);
         }
         
         // Return the Output Bitmap
