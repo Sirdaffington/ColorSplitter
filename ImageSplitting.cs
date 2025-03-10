@@ -18,7 +18,8 @@ public class ImageSplitting
 
     public enum Algorithm
     {
-        KMeans
+        KMeans,
+        MedianCut
     }
 
     // Handles Quantization of an Image
@@ -31,6 +32,10 @@ public class ImageSplitting
                 int Iterations = argument == null ? 4 : (int)argument;
                 var kMeans = new KMeans(Colors, Iterations);
                 (quantizedBitmap, colorDictionary) = kMeans.applyKMeans(accessedBitmap, lab);
+                break;
+            case Algorithm.MedianCut:
+                var medianCut = new MedianCut();
+                (quantizedBitmap, colorDictionary) = medianCut.Quantize(accessedBitmap, Colors, lab);
                 break;
         }
         
